@@ -6,10 +6,12 @@ from flask import Flask, request, jsonify, url_for, send_from_directory
 from flask_migrate import Migrate
 from flask_swagger import swagger
 from api.utils import APIException, generate_sitemap
-from api.models import db
+from api.models import db, User
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token
 
 # from models import Person
 
@@ -40,7 +42,52 @@ setup_commands(app)
 # Add all endpoints form the API with a "api" prefix
 app.register_blueprint(api, url_prefix='/api')
 
-# Handle/serialize errors like a JSON object
+CORS(api)
+
+app.config["JWT_SECRET_KEY"] = "MiCl@aveSecretaD&Administrad0r!"
+jwt = JWTManager(app)
+
+@app.route("/token", methods=["POST"])
+def create_token():
+    email = request.json.get("email", None)
+    password = request.json.get("password", None)
+
+    user = User.query.filter_by(email=email, password=password).first()
+
+    if user is None:
+        return jsonify({"msg": "Bad username or password"}), 401
+    
+    access_token = create_access_token(identity=user.id)
+    return jsonify({ "token": access_token, "user_id": user.id }), 200
+
+@api.route("/auth/register", methods=["POST"])
+def register():
+    body = request.get_json() or {}
+    email = (body.get("email") or "").strip().lower()
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+
+    if not email or not username or not password:
+        return jsonify({"error": "email, username y password son requeridos"}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "email ya existe"}), 409
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "username ya existe"}), 409
+
+    user = User(
+        email=email,
+        username=username,
+        password_hash=generate_password_hash(password),
+        is_active=True
+    )
+    db.session.add(user)
+    db.session.commit()
+
+    token = create_access_token(identity=str(user.id))
+    return jsonify({"user": user.serialize(), "token": token}), 201
+
 
 
 @app.errorhandler(APIException)
@@ -57,6 +104,8 @@ def sitemap():
     return send_from_directory(static_file_dir, 'index.html')
 
 # any other endpoint will try to serve it like a static file
+
+
 @app.route('/<path:path>', methods=['GET'])
 def serve_any_other_file(path):
     if not os.path.isfile(os.path.join(static_file_dir, path)):
